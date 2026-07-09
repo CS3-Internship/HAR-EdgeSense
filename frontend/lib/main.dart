@@ -12,6 +12,7 @@ Future<void> main() async {
     FlutterForegroundTask.initCommunicationPort();
   }
 
+  
   runApp(const EdgeSenseApp());
 }
 
