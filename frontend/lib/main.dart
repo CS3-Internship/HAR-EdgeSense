@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:edge_sense/screens/session_screen.dart';
 import 'package:edge_sense/config/network_service.dart';
+import 'package:edge_sense/services/hotspot_manager.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -10,6 +13,10 @@ Future<void> main() async {
   if (!kIsWeb) {
     await initializeNetwork();
     FlutterForegroundTask.initCommunicationPort();
+    // Android doesn't remember an app's Wi-Fi network suggestions across a
+    // reinstall/data-clear, so re-register any saved edge-server hotspots
+    // every cold start. Not awaited — shouldn't delay showing the UI.
+    unawaited(HotspotManager.applySaved());
   }
 
   runApp(const EdgeSenseApp());

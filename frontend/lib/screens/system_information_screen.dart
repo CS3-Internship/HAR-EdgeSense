@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:edge_sense/constants/theme.dart';
+import 'package:edge_sense/screens/hotspot_settings_screen.dart';
 import 'package:edge_sense/widgets/network_info_card.dart';
 import 'package:edge_sense/widgets/sensor_card.dart';
 import 'package:edge_sense/widgets/session_card.dart';
@@ -94,6 +95,60 @@ class SystemInformationScreen extends StatelessWidget {
                     handoverSignalLabel: state.handoverSignalLabel,
                     handoverUrgency: state.handoverUrgency,
                     handoverInProgress: state.handoverInProgress,
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: AppTheme.colorCardBg,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppTheme.colorBorder, width: 1),
+                    ),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(12),
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => const HotspotSettingsScreen()),
+                          );
+                        },
+                        child: const Padding(
+                          padding: EdgeInsets.all(16.0),
+                          child: Row(
+                            children: [
+                              Icon(Icons.wifi_tethering, color: AppTheme.colorPrimary, size: 24),
+                              SizedBox(width: 16),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Edge Server Networks',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: AppTheme.colorTextDark,
+                                      ),
+                                    ),
+                                    SizedBox(height: 4),
+                                    Text(
+                                      'Register hotspots so Wi-Fi roams between them',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w500,
+                                        color: AppTheme.colorTextGrey,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Icon(Icons.arrow_forward_ios, color: AppTheme.colorTextGrey, size: 16),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 16),
                   SessionCard(
