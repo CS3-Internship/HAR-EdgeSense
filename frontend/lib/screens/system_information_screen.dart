@@ -18,6 +18,10 @@ class AppState {
   final double gyroX;
   final double gyroY;
   final double gyroZ;
+  final String handoverMessage;
+  final String handoverSignalLabel;
+  final double handoverUrgency;
+  final bool handoverInProgress;
 
   const AppState({
     required this.serviceRunning,
@@ -32,6 +36,10 @@ class AppState {
     required this.gyroX,
     required this.gyroY,
     required this.gyroZ,
+    this.handoverMessage = 'Connecting…',
+    this.handoverSignalLabel = 'Good',
+    this.handoverUrgency = 0.0,
+    this.handoverInProgress = false,
   });
 }
 
@@ -82,6 +90,10 @@ class SystemInformationScreen extends StatelessWidget {
                     subnetMask: state.subnetMask,
                     isServerConnected: state.isServerConnected,
                     serviceRunning: state.serviceRunning,
+                    handoverMessage: state.handoverMessage,
+                    handoverSignalLabel: state.handoverSignalLabel,
+                    handoverUrgency: state.handoverUrgency,
+                    handoverInProgress: state.handoverInProgress,
                   ),
                   const SizedBox(height: 16),
                   SessionCard(

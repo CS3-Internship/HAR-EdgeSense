@@ -9,6 +9,10 @@ class NetworkInfoCard extends StatelessWidget {
   final String subnetMask;
   final bool isServerConnected;
   final bool serviceRunning;
+  final String handoverMessage;
+  final String handoverSignalLabel;
+  final double handoverUrgency;
+  final bool handoverInProgress;
 
   const NetworkInfoCard({
     super.key,
@@ -18,6 +22,10 @@ class NetworkInfoCard extends StatelessWidget {
     required this.subnetMask,
     required this.isServerConnected,
     required this.serviceRunning,
+    this.handoverMessage = '',
+    this.handoverSignalLabel = 'Good',
+    this.handoverUrgency = 0.0,
+    this.handoverInProgress = false,
   });
 
   @override
@@ -59,10 +67,22 @@ class NetworkInfoCard extends StatelessWidget {
             _networkRow('Foreground Service', serviceRunning ? '🟢 Running' : '🔴 Stopped'),
             const SizedBox(height: 8),
             _networkRow('AI Engine', serviceRunning ? '🟢 Monitoring Live Data' : '🔴 Stopped'),
+            if (handoverMessage.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _networkRow('Signal Quality', '${_signalIcon()} $handoverSignalLabel (${handoverUrgency.toStringAsFixed(0)})'),
+              const SizedBox(height: 8),
+              _networkRow('Handover Status', handoverInProgress ? '🔄 $handoverMessage' : handoverMessage),
+            ],
           ],
         ),
       ),
     );
+  }
+
+  String _signalIcon() {
+    if (handoverSignalLabel == 'Poor') return '🔴';
+    if (handoverSignalLabel == 'Fair') return '🟡';
+    return '🟢';
   }
 
   Widget _networkRow(String label, String value) {

@@ -93,9 +93,9 @@ def init_session_db(session_id: str):
 
 # ── Write ──────────────────────────────────────────────────────────────────────
 
-def insert_prediction(session_id: str, activity: str, confidence: float, step_count: int):
+def insert_prediction(session_id: str, activity: str, confidence: float, step_count: int, timestamp: str = None):
     """Inserts a prediction record into both the main database and session-specific database."""
-    local_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    local_time = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # 1. Write to main database exactly as before
     main_conn = get_connection()
@@ -117,6 +117,86 @@ def insert_prediction(session_id: str, activity: str, confidence: float, step_co
     """, (local_time, activity, confidence, step_count))
     session_conn.commit()
     session_conn.close()
+
+
+# ── Cross-edge-server session migration ────────────────────────────────────────
+# The session-specific SQLite file (data/sessions/session_<id>.db) is exactly what's
+# mounted at /app/data by docker-compose.yml. When a client hands its session off to
+# a different edge server container, that whole file is transferred (see
+# GET/POST /session/{id}/database in routes.py) rather than replaying rows one at a
+# time, so the migrated history is a byte-for-byte match of what the old server had.
+
+def has_main_predictions_for_session(session_id: str) -> bool:
+    """Checks whether the main database already has rows for this session."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) as total FROM predictions WHERE session_id = ?", (session_id,))
+    total = cursor.fetchone()["total"]
+    conn.close()
+    return total > 0
+
+
+def get_session_db_bytes(session_id: str) -> bytes:
+    """Reads the raw bytes of a session's SQLite file, creating an empty one if needed."""
+    init_session_db(session_id)
+    with open(get_session_db_path(session_id), "rb") as f:
+        return f.read()
+
+
+def replace_session_db_file(session_id: str, data: bytes):
+    """Overwrites a session's SQLite file with bytes received from another edge server."""
+    os.makedirs(SESSIONS_DIR, exist_ok=True)
+    with open(get_session_db_path(session_id), "wb") as f:
+        f.write(data)
+
+
+def purge_session(session_id: str):
+    """
+    Deletes a session's persisted data on this server — its dedicated SQLite file
+    and its rows in the main database — after that data has been migrated to
+    another edge server. Called as the final step of a handoff, on the OLD edge
+    server, so that if the client ever roams back here it starts clean instead of
+    finding (and colliding with) stale history left over from before it moved on.
+    """
+    db_path = get_session_db_path(session_id)
+    if os.path.exists(db_path):
+        os.remove(db_path)
+
+    main_conn = get_connection()
+    main_cursor = main_conn.cursor()
+    main_cursor.execute("DELETE FROM predictions WHERE session_id = ?", (session_id,))
+    main_conn.commit()
+    main_conn.close()
+
+
+def sync_session_into_main_db(session_id: str):
+    """
+    After a session's SQLite file has been replaced via replace_session_db_file,
+    mirrors its rows into this server's main database so session-less aggregate
+    queries (e.g. the overall /dashboard) include the migrated history too.
+    Skipped if the main database already has rows for this session (idempotent
+    against retried handoff uploads).
+    """
+    if has_main_predictions_for_session(session_id):
+        return
+
+    session_conn = get_session_connection(session_id)
+    session_cursor = session_conn.cursor()
+    session_cursor.execute("SELECT timestamp, activity, confidence, step_count FROM predictions ORDER BY id")
+    rows = session_cursor.fetchall()
+    session_conn.close()
+
+    if not rows:
+        return
+
+    main_conn = get_connection()
+    main_cursor = main_conn.cursor()
+    main_cursor.executemany(
+        "INSERT INTO predictions (timestamp, session_id, activity, confidence, step_count) VALUES (?, ?, ?, ?, ?)",
+        [(row["timestamp"], session_id, row["activity"], row["confidence"], row["step_count"]) for row in rows],
+    )
+    main_conn.commit()
+    main_conn.close()
 
 
 # ── Read / Analytics ───────────────────────────────────────────────────────────

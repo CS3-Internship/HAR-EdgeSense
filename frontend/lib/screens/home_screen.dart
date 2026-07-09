@@ -13,6 +13,7 @@ import 'package:edge_sense/screens/dashboard_screen.dart';
 import 'package:edge_sense/config/network_config.dart';
 import 'package:edge_sense/constants/theme.dart';
 import 'package:edge_sense/services/foreground_task_handler.dart';
+import 'package:edge_sense/services/handover_controller.dart';
 import 'package:edge_sense/screens/system_information_screen.dart';
 import 'package:edge_sense/widgets/prediction_card.dart';
 import 'package:edge_sense/widgets/step_card.dart';
@@ -59,6 +60,10 @@ class _HomePageState extends State<HomePage> {
       gyroX: _gyroX,
       gyroY: _gyroY,
       gyroZ: _gyroZ,
+      handoverMessage: _handoverMessage,
+      handoverSignalLabel: _handoverSignalLabel,
+      handoverUrgency: _handoverUrgency,
+      handoverInProgress: _handoverInProgress,
     );
   }
 
@@ -125,6 +130,12 @@ class _HomePageState extends State<HomePage> {
   bool _isLocationPermissionGranted = false;
   Timer? _networkInfoTimer;
 
+  late final HandoverController _handoverController;
+  String _handoverMessage = 'Connecting…';
+  String _handoverSignalLabel = 'Good';
+  double _handoverUrgency = 0.0;
+  bool _handoverInProgress = false;
+
   String _formatTime12h(DateTime dt) {
     int hour = dt.hour;
     final minute = dt.minute.toString().padLeft(2, '0');
@@ -139,6 +150,17 @@ class _HomePageState extends State<HomePage> {
     super.initState();
     _initPrefs();
     FlutterForegroundTask.addTaskDataCallback(_onReceiveTaskData);
+
+    _handoverController = HandoverController(
+      sessionIdProvider: () => widget.sessionId,
+      onServerChanged: (newServerUrl) {
+        // Push the new edge server address to the background isolate immediately,
+        // rather than waiting for the next periodic batch send to carry it over.
+        FlutterForegroundTask.sendDataToTask({'server_url': sendBatchUrl});
+      },
+    );
+    _handoverController.status.addListener(_onHandoverStatusChanged);
+    _handoverController.start();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _requestPermissions();
@@ -295,8 +317,22 @@ class _HomePageState extends State<HomePage> {
     FlutterForegroundTask.removeTaskDataCallback(_onReceiveTaskData);
     _stopSensorStreams();
     _networkInfoTimer?.cancel();
+    _handoverController.status.removeListener(_onHandoverStatusChanged);
+    _handoverController.dispose();
     _appStateNotifier.dispose();
     super.dispose();
+  }
+
+  void _onHandoverStatusChanged() {
+    final status = _handoverController.status.value;
+    if (!mounted) return;
+    setState(() {
+      _handoverMessage = status.message;
+      _handoverSignalLabel = status.signalLabel;
+      _handoverUrgency = status.urgency;
+      _handoverInProgress = status.state == HandoverState.switching;
+    });
+    _updateAppState();
   }
 
   void _onReceiveTaskData(Object data) {

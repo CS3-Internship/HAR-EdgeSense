@@ -1,249 +1,153 @@
-# EdgeSense HAR Server
+# EdgeSense — Real-Time Human Activity Recognition
 
-The EdgeSense HAR (Human Activity Recognition) Edge Server is a production-style, modular FastAPI backend that runs real-time LSTM machine learning inference on streamed triaxial accelerometer and gyroscope data. It persists prediction history in SQLite and exposes analytical APIs and a web dashboard.
+EdgeSense is an end-to-end Human Activity Recognition (HAR) system that classifies a user's physical activity — **Walking, Walking Upstairs, Walking Downstairs, Sitting, Standing, Laying** — in real time from a phone's accelerometer and gyroscope. A Flutter mobile app streams live sensor data to a FastAPI edge server, which runs a trained LSTM model and returns predictions, step counts, and analytics back to the app.
+
+The project has three parts:
+
+| Component | Description |
+| :--- | :--- |
+| [`frontend/`](frontend) | Flutter app that reads on-device sensors, streams data to the server, and displays live predictions, step counts, and analytics dashboards. |
+| [`backend/`](backend) | FastAPI edge server that buffers streamed readings into sliding windows, runs LSTM inference, and persists results to SQLite. |
+| [`frontend/ml_pipeline/`](frontend/ml_pipeline) | Python training pipeline that builds and evaluates the LSTM model on the UCI HAR dataset, producing the `.keras` model and `StandardScaler` used by the backend. |
 
 ---
 
-## Architecture Overview
+## How It Works
 
 ```
-                          ┌───────────────────────────┐
-                          │   Flutter Mobile Client   │
-                          └─────────────┬─────────────┘
-                                        │ (Send Batch / Send Data)
-                                        ▼
-                          ┌───────────────────────────┐
-                          │    FastAPI Edge Server    │
-                          └─────────────┬─────────────┘
-                                        │
-                 ┌──────────────────────┴──────────────────────┐
-                 ▼                                             ▼
-     ┌───────────────────────┐                     ┌───────────────────────┐
-     │   In-Memory Session   │                     │  SQLite Database      │
-     │   Buffers (in RAM)    │                     │  (Prediction History) │
-     └───────────┬───────────┘                     └───────────────────────┘
-                 │ (128 Window Samples)
-                 ▼
-     ┌───────────────────────┐
-     │   StandardScaler &    │
-     │   LSTM Inference      │
-     └───────────────────────┘
+   ┌────────────────────┐   accelerometer + gyroscope   ┌───────────────────────────┐
+   │  Flutter Mobile App │ ─────────────────────────────▶│    FastAPI Edge Server    │
+   │  (frontend/)         │◀───────────────────────────── │      (backend/)           │
+   └────────────────────┘   activity, confidence, steps  └─────────────┬─────────────┘
+                                                                        │
+                                                  ┌─────────────────────┴─────────────────────┐
+                                                  ▼                                             ▼
+                                     ┌───────────────────────┐                     ┌───────────────────────┐
+                                     │  In-memory session    │                     │  SQLite database      │
+                                     │  buffers (sliding      │                     │  (prediction history, │
+                                     │  128-sample windows)  │                     │  used by dashboard)    │
+                                     └───────────┬───────────┘                     └───────────────────────┘
+                                                 ▼
+                                     ┌───────────────────────┐
+                                     │  StandardScaler +      │
+                                     │  LSTM inference        │
+                                     │  (trained via           │
+                                     │  ml_pipeline/)          │
+                                     └───────────────────────┘
 ```
 
-1. **In-Memory Buffering**: Raw sensor readings are streamed from the client and held in high-speed thread-safe RAM buffers per session ID to construct sliding windows.
-2. **Preprocessing**: Once a session buffer accumulates 128 samples, we align the dominant gravity axis to the X-axis, scale the triaxial signals using a pre-trained `StandardScaler`, and apply a 50% overlap sliding window mechanism.
-3. **ML Inference**: A pre-trained LSTM Keras model (`.keras`) runs thread-safe inference to predict the user's activity.
-4. **SQLite Persistence**: Inference results are logged to an SQLite database (`har_metrics.db`) along with the local timestamp, session ID, activity classification, confidence level, and step counts.
-5. **Analytics Engine**: The server aggregates metrics, hourly density distributions, and activity percentages, exposing them via JSON APIs and a real-time web dashboard.
+1. The **Flutter app** collects live accelerometer/gyroscope samples (via `sensors_plus`) and a foreground service, and streams them in batches to the edge server over HTTP.
+2. The **FastAPI server** buffers samples per session ID until it has a 128-sample window (2.56s at 50Hz), preprocesses it to match the training format, scales it, and runs it through the LSTM model.
+3. The prediction (activity, confidence, step count) is sent back to the app and logged to SQLite for the analytics dashboard (activity breakdown, hourly distribution, history, statistics).
+4. The **ML pipeline** is what produced the model and scaler in the first place, trained on the [UCI HAR dataset](dataset).
 
 ---
 
-## Code Directory Structure
+## Repository Structure
 
-* `app.py`: FastAPI server entrypoint. Runs database initialization and loads ML assets on startup.
-* `routes.py`: Contains API routers and GET/POST handlers (including the web dashboard).
-* `database.py`: Manages SQLite schemas, insert operations, and analytics queries.
-* `inference.py`: Handles model predictions, scaling, and database logging.
-* `session_manager.py`: Thread-safe RAM buffers for incoming real-time streams.
-* `preprocessing.py`: Conversion of sensor readings to the UCI HAR format.
-* `config.py`: Scaler and Keras model path variables, along with activity label indices.
+```
+HAR EdgeSense/
+├── backend/               FastAPI edge server (real-time inference + analytics API)
+│   ├── app.py             App entrypoint — loads model/scaler, initializes DB
+│   ├── routes.py          API endpoints (/send, /send_batch, /predict, /dashboard, ...)
+│   ├── database.py        SQLite schema, inserts, analytics queries
+│   ├── inference.py       Model loading + prediction logic
+│   ├── session_manager.py Thread-safe in-RAM per-session sliding-window buffers
+│   ├── preprocessing.py   Converts raw sensor readings to the trained model's input format
+│   ├── config.py          Model/scaler paths, activity label mapping
+│   ├── models/            best_model.keras, scaler.pkl
+│   ├── data/               har_metrics.db (SQLite) + session data
+│   ├── Dockerfile / docker-compose.yml
+│   └── README.md           Full API reference & DB schema
+│
+├── frontend/               Flutter mobile app (Android/iOS/desktop/web)
+│   ├── lib/
+│   │   ├── screens/        Session entry, home/live monitoring, dashboard, activity detail
+│   │   ├── widgets/        Prediction, sensor, step, connection, network-info cards, pie chart
+│   │   ├── services/       Foreground task handler, fuzzy-logic handover controller, Wi-Fi RSSI channel
+│   │   ├── config/         Server URL config + network discovery
+│   │   └── main.dart
+│   ├── ml_pipeline/         Model training pipeline (see below)
+│   └── README.md
+│
+└── dataset/                 UCI HAR Dataset (raw + preprocessed inertial signals used for training)
+    ├── train/, test/          Feature vectors, labels, and raw inertial signals
+    ├── features.txt, activity_labels.txt
+    └── README.md
+```
 
 ---
 
-## Database Schema
+## Machine Learning Model
 
-Database: `har_metrics.db`  
-Table: `predictions`
+* **Architecture**: Stacked LSTM — `LSTM(64, return_sequences=True) → Dropout(0.5) → LSTM(64) → Dropout(0.5) → Dense(6, softmax)`
+* **Input**: 128-sample windows × 6 channels (3-axis accelerometer + 3-axis gyroscope), 50Hz, 50% window overlap
+* **Training data**: [UCI HAR Dataset](dataset/README.md) — 30 subjects, 6 activities, waist-mounted smartphone
+* **Results**: ~91% test accuracy, precision, recall, and F1-score on the held-out UCI HAR test set
+* **Pipeline** ([`frontend/ml_pipeline/`](frontend/ml_pipeline)): `data_loader.py` (loads/standardizes signals) → `model.py` (architecture) → `train.py` (training, early stopping, checkpointing) → `evaluate.py` (test metrics, confusion matrix)
 
-| Column | Type | Description |
-| :--- | :--- | :--- |
-| `id` | `INTEGER` | Primary Key, Auto-incremented ID |
-| `timestamp` | `DATETIME` | Date and time (local) of prediction: `YYYY-MM-DD HH:MM:SS` |
-| `session_id` | `TEXT` | Unique identifier representing the streaming device session |
-| `activity` | `TEXT` | Predicted activity name (`Walking`, `Sitting`, `Laying`, `Standing`, etc.) |
-| `confidence` | `REAL` | Model classification confidence (float between `0.0` and `1.0`) |
-| `step_count` | `INTEGER` | Step count accumulated during the prediction frame |
+See [`frontend/walkthrough.md`](frontend/walkthrough.md) for the full training write-up, and [`backend/README.md`](backend/README.md#architecture-overview) for how the model is served in production.
 
 ---
 
-## API Endpoints Reference
+## Multi-Edge-Server Handover
 
-### 1. Ping Check
-* **Route**: `GET /ping`
-* **Description**: Verifies server reachability.
-* **Example JSON Response**:
-  ```json
-  {
-    "message": "Edge Server Reachable"
-  }
-  ```
+EdgeSense supports deploying the backend on **multiple edge servers**, each its own Docker container (e.g. one per hotspot/location). Each keeps its own `./data` volume — the SQLite history and in-RAM buffer for a session live wherever that session started. When a phone roams onto a different edge server's network, that session would normally break: the new container's `./data` is empty and its buffer starts cold.
 
-### 2. Polling Prediction
-* **Route**: `GET /predict/{session_id}`
-* **Description**: Polls the last calculated prediction for a specific session ID from active RAM.
-* **Example JSON Response**:
-  ```json
-  {
-    "status": "predicted",
-    "activity": "Sitting",
-    "confidence": 0.985,
-    "step_count": 42
-  }
-  ```
+To keep the session alive, the Flutter app runs a small **fuzzy-logic handover controller** that fuzzifies Wi-Fi signal strength (RSSI) and request latency into an urgency score, and uses it to migrate the session to the new edge server the moment a network change is detected — pre-fetching everything ahead of time once the connection looks like it's degrading, so there's minimal gap in inference. Two things move on handoff: the small in-RAM state (buffer/step count/last prediction) via a JSON snapshot API, and the session's **actual SQLite file** from `./data/sessions/` — downloaded whole from the old container and uploaded whole into the new container's `./data` volume, so history moves byte-for-byte rather than being replayed row by row. See [`backend/README.md#multi-edge-server-handover`](backend/README.md#multi-edge-server-handover) for the full design and the four `/session/{id}/...` endpoints, and [`frontend/lib/services/handover_controller.dart`](frontend/lib/services/handover_controller.dart) / [`fuzzy_handover.dart`](frontend/lib/services/fuzzy_handover.dart) for the client-side logic.
 
-### 3. Send Single Sensor Data Packet
-* **Route**: `POST /send`
-* **Description**: Handles a single data point stream (primarily for backward compatibility).
-* **Example JSON Request**:
-  ```json
-  {
-    "session": "test-session-123",
-    "device": "EdgeSense",
-    "time": "2026-07-02T15:30:00",
-    "accelerometer": { "x": 0.043, "y": 9.801, "z": -0.112 },
-    "gyroscope": { "x": 0.001, "y": -0.003, "z": 0.002 },
-    "step_count": 12
-  }
-  ```
-* **Example JSON Response** (if collecting samples):
-  ```json
-  {
-    "status": "collecting",
-    "samples": 65,
-    "required": 128,
-    "step_count": 12
-  }
-  ```
-* **Example JSON Response** (if inference executed):
-  ```json
-  {
-    "status": "predicted",
-    "activity": "Standing",
-    "confidence": 0.994,
-    "step_count": 12
-  }
-  ```
+---
 
-### 4. Send Batched Sensor Data Packet (Production Optimized)
-* **Route**: `POST /send_batch`
-* **Description**: Streams a batch of sensor readings.
-* **Example JSON Request**:
-  ```json
-  {
-    "session": "test-session-123",
-    "device": "EdgeSense",
-    "step_count": 35,
-    "readings": [
-      {
-        "time": "2026-07-02T15:30:00",
-        "accelerometer": { "x": 0.02, "y": 9.78, "z": -0.1 },
-        "gyroscope": { "x": 0.0, "y": 0.0, "z": 0.0 }
-      },
-      {
-        "time": "2026-07-02T15:30:01",
-        "accelerometer": { "x": 0.05, "y": 9.82, "z": -0.12 },
-        "gyroscope": { "x": 0.01, "y": -0.01, "z": 0.0 }
-      }
-    ]
-  }
-  ```
-* **Example JSON Response**:
-  ```json
-  {
-    "status": "predicted",
-    "activity": "Walking",
-    "confidence": 0.932,
-    "step_count": 35
-  }
-  ```
+## Getting Started
 
-### 5. Get Analytics Dashboard Data
-* **Route**: `GET /dashboard`
-* **Description**: Provides aggregated analytics metrics from the SQLite database for UI visualization.
-* **Example JSON Response**:
-  ```json
-  {
-    "activity_counts": {
-      "Walking": 34,
-      "Walking Upstairs": 12,
-      "Walking Downstairs": 8,
-      "Sitting": 20,
-      "Standing": 45,
-      "Laying": 30
-    },
-    "activity_percentages": {
-      "Walking": 0.228,
-      "Walking Upstairs": 0.081,
-      "Walking Downstairs": 0.054,
-      "Sitting": 0.134,
-      "Standing": 0.302,
-      "Laying": 0.201
-    },
-    "hourly_activity_distribution": {
-      "00": 0, "01": 0, "02": 0, "03": 0, "04": 0, "05": 0,
-      "06": 4, "07": 12, "08": 30, "09": 15, "10": 0, "11": 0,
-      "12": 24, "13": 18, "14": 42, "15": 4, "16": 0, "17": 0,
-      "18": 0, "19": 0, "20": 0, "21": 0, "22": 0, "23": 0
-    },
-    "recent_predictions": [
-      {
-        "timestamp": "2026-07-02 15:30:21",
-        "time": "15:30:21",
-        "activity": "Walking",
-        "confidence": 0.942
-      }
-    ],
-    "total_predictions": 149
-  }
-  ```
+### 1. Run the backend
 
-### 6. Get Prediction History Logs
-* **Route**: `GET /history`
-* **Description**: Retrieves a sequence of predictions.
-* **Parameters**: `limit` (Optional, Default: `50`)
-* **Example JSON Response**:
-  ```json
-  [
-    {
-      "timestamp": "2026-07-02 15:30:21",
-      "time": "15:30:21",
-      "session_id": "test-session-123",
-      "activity": "Walking",
-      "confidence": 0.942,
-      "step_count": 35
-    }
-  ]
-  ```
+```bash
+cd backend
+pip install -r requirements.txt
+uvicorn app:app --host 0.0.0.0 --port 5000
+```
 
-### 7. Get General Statistics
-* **Route**: `GET /statistics`
-* **Description**: Calculates high-level summary statistics.
-* **Example JSON Response**:
-  ```json
-  {
-    "total_predictions": 149,
-    "average_confidence": 0.884,
-    "most_active_hour": "14:00",
-    "most_common_activity": "Standing",
-    "total_steps": 245
-  }
-  ```
+Or with Docker:
 
-### 8. Get Activity-Specific Statistics
-* **Route**: `GET /statistics/{activity}`
-* **Description**: Computes total duration and hourly distribution for a single activity.
-* **Example JSON Response** (`GET /statistics/Walking`):
-  ```json
-  {
-    "activity": "Walking",
-    "count": 34,
-    "duration_seconds": 87,
-    "duration_string": "1m 27s",
-    "hourly_distribution": {
-      "00": 0, "01": 0, "02": 0, "03": 0, "04": 0, "05": 0,
-      "06": 2, "07": 4, "08": 10, "09": 5, "10": 0, "11": 0,
-      "12": 6, "13": 2, "14": 5, "15": 0, "16": 0, "17": 0,
-      "18": 0, "19": 0, "20": 0, "21": 0, "22": 0, "23": 0
-    }
-  }
-  ```
+```bash
+cd backend
+docker compose up --build
+```
+
+The server exposes `GET /ping` to verify it's reachable, plus streaming and analytics endpoints documented in [`backend/README.md`](backend/README.md).
+
+Deploy one of these per edge server/hotspot location. Each is fully independent — there's no central cloud component; the phone talks to whichever edge server it's currently connected to, and the [handover mechanism](#multi-edge-server-handover) above carries a session between them.
+
+### 2. Get the app
+
+**Download a build**: grab the latest APK from this repo's [Releases page](../../releases) and install it directly (no Play Store needed). A new release is published automatically whenever a version tag is pushed — see [`frontend/README.md#downloading-a-build`](frontend/README.md#downloading-a-build) for how that works and its signing caveat.
+
+**Or run from source**:
+
+```bash
+cd frontend
+flutter pub get
+flutter run
+```
+
+On first launch, enter a Session ID and point the app at your backend's address (see [`frontend/lib/config/network_config.dart`](frontend/lib/config/network_config.dart)) — the phone and server must be reachable on the same network.
+
+### 3. (Optional) Retrain the model
+
+```bash
+cd frontend/ml_pipeline
+python train.py
+python evaluate.py
+```
+
+Trained artifacts (`best_model.keras`, `scaler.pkl`) land in `ml_pipeline/output/` — copy them into `backend/models/` to deploy an updated model.
+
+---
+
+## Further Reading
+
+* [`backend/README.md`](backend/README.md) — full API reference, request/response examples, and database schema
+* [`frontend/README.md`](frontend/README.md) — Flutter project setup
+* [`frontend/walkthrough.md`](frontend/walkthrough.md) — model design, training curves, and evaluation report
+* [`dataset/README.md`](dataset/README.md) — UCI HAR Dataset description and citation
