@@ -6,6 +6,7 @@ The EdgeSense HAR (Human Activity Recognition) Edge Server is a production-style
 
 ## Architecture Overview
 
+
 ```
                           ┌───────────────────────────┐
                           │   Flutter Mobile Client   │

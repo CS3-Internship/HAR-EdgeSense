@@ -19,6 +19,7 @@ Future<void> main() async {
     unawaited(HotspotManager.applySaved());
   }
 
+  
   runApp(const EdgeSenseApp());
 }
 

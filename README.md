@@ -9,7 +9,7 @@ The project has three parts:
 | [`frontend/`](frontend) | Flutter app that reads on-device sensors, streams data to the server, and displays live predictions, step counts, and analytics dashboards. |
 | [`backend/`](backend) | FastAPI edge server that buffers streamed readings into sliding windows, runs LSTM inference, and persists results to SQLite. |
 | [`frontend/ml_pipeline/`](frontend/ml_pipeline) | Python training pipeline that builds and evaluates the LSTM model on the UCI HAR dataset, producing the `.keras` model and `StandardScaler` used by the backend. |
-
+'
 ---
 
 ## How It Works
