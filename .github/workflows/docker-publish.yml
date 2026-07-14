@@ -1,9 +1,12 @@
 name: Build & Push Backend Docker Image
 
-# Push a version tag (e.g. `git tag v1.0.0 && git push origin v1.0.0` — the
-# same tag that triggers the APK release) to build the backend image from
-# backend/Dockerfile and push it to Docker Hub as sharu6402/hars:<tag> and
-# sharu6402/hars:latest. Can also be run manually from the Actions tab.
+# Independent from the Android APK release workflow — this one has its own tag
+# namespace so a backend-only change doesn't force an app rebuild and vice
+# versa. Push a tag like `git tag backend-v1.0.0 && git push origin backend-v1.0.0`
+# to build the backend image from backend/Dockerfile and push it to Docker Hub
+# as sharu6402/hars:<version> and sharu6402/hars:latest (the "backend-" prefix
+# is stripped from the Docker tag itself). Can also be run manually from the
+# Actions tab.
 #
 # Requires two repo secrets (Settings -> Secrets and variables -> Actions):
 #   DOCKERHUB_USERNAME - your Docker Hub username (sharu6402)
@@ -13,7 +16,7 @@ name: Build & Push Backend Docker Image
 on:
   push:
     tags:
-      - "v*.*.*"
+      - "backend-v*.*.*"
   workflow_dispatch:
 
 jobs:
@@ -35,7 +38,7 @@ jobs:
         id: vars
         run: |
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "tag=${GITHUB_REF_NAME#backend-}" >> "$GITHUB_OUTPUT"
           else
             echo "tag=manual-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi

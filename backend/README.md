@@ -53,14 +53,14 @@ The EdgeSense HAR (Human Activity Recognition) Edge Server is a production-style
 
 ## Docker Image
 
-Pushing a version tag builds this image from `Dockerfile` and publishes it to Docker Hub as [`sharu6402/hars`](https://hub.docker.com/r/sharu6402/hars) automatically, via [`.github/workflows/docker-publish.yml`](../.github/workflows/docker-publish.yml) — the same tag used for the [Android APK release](../frontend/README.md#downloading-a-build):
+Pushing a version tag builds this image from `Dockerfile` and publishes it to Docker Hub as [`sharu6402/hars`](https://hub.docker.com/r/sharu6402/hars) automatically, via [`.github/workflows/docker-publish.yml`](../.github/workflows/docker-publish.yml). This has its own `backend-v*.*.*` tag namespace, **independent of** the [Android APK release](../frontend/README.md#downloading-a-build)'s `v*.*.*` tags — a backend-only change doesn't force an app rebuild, and vice versa:
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag backend-v1.0.0
+git push origin backend-v1.0.0
 ```
 
-This publishes both `sharu6402/hars:v1.0.0` and `sharu6402/hars:latest`. You can also trigger a build without tagging via **Actions → Build & Push Backend Docker Image → Run workflow** (manual runs publish as `sharu6402/hars:manual-<short-sha>` plus `:latest`).
+The `backend-` prefix is stripped from the image tag itself, so this publishes both `sharu6402/hars:v1.0.0` and `sharu6402/hars:latest`. You can also trigger a build without tagging via **Actions → Build & Push Backend Docker Image → Run workflow** (manual runs publish as `sharu6402/hars:manual-<short-sha>` plus `:latest`).
 
 **One-time setup** (repo owner only): add two secrets under **Settings → Secrets and variables → Actions**:
 * `DOCKERHUB_USERNAME` — your Docker Hub username
