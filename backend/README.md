@@ -51,6 +51,31 @@ The EdgeSense HAR (Human Activity Recognition) Edge Server is a production-style
 
 ---
 
+## Docker Image
+
+Pushing a version tag builds this image from `Dockerfile` and publishes it to Docker Hub as [`sharu6402/hars`](https://hub.docker.com/r/sharu6402/hars) automatically, via [`.github/workflows/docker-publish.yml`](../.github/workflows/docker-publish.yml) — the same tag used for the [Android APK release](../frontend/README.md#downloading-a-build):
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+This publishes both `sharu6402/hars:v1.0.0` and `sharu6402/hars:latest`. You can also trigger a build without tagging via **Actions → Build & Push Backend Docker Image → Run workflow** (manual runs publish as `sharu6402/hars:manual-<short-sha>` plus `:latest`).
+
+**One-time setup** (repo owner only): add two secrets under **Settings → Secrets and variables → Actions**:
+* `DOCKERHUB_USERNAME` — your Docker Hub username
+* `DOCKERHUB_TOKEN` — a Docker Hub **access token** (not your password), created at [hub.docker.com → Account Settings → Security → New Access Token](https://hub.docker.com/settings/security)
+
+To run the published image directly:
+
+```bash
+docker run -p 5000:5000 -v ./data:/app/data sharu6402/hars:latest
+```
+
+Or point `docker-compose.yml`'s `build: .` at `image: sharu6402/hars:latest` instead, if you'd rather pull than build locally.
+
+---
+
 ## Database Schema
 
 Database: `har_metrics.db`  

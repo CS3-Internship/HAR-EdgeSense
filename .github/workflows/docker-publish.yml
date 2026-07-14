@@ -1,0 +1,52 @@
+name: Build & Push Backend Docker Image
+
+# Push a version tag (e.g. `git tag v1.0.0 && git push origin v1.0.0` — the
+# same tag that triggers the APK release) to build the backend image from
+# backend/Dockerfile and push it to Docker Hub as sharu6402/hars:<tag> and
+# sharu6402/hars:latest. Can also be run manually from the Actions tab.
+#
+# Requires two repo secrets (Settings -> Secrets and variables -> Actions):
+#   DOCKERHUB_USERNAME - your Docker Hub username (sharu6402)
+#   DOCKERHUB_TOKEN     - a Docker Hub access token (hub.docker.com -> Account
+#                         Settings -> Security -> New Access Token), not your
+#                         account password.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Determine image tag
+        id: vars
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=manual-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: true
+          tags: |
+            sharu6402/hars:${{ steps.vars.outputs.tag }}
+            sharu6402/hars:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
