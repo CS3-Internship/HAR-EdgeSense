@@ -13,6 +13,7 @@ class NetworkInfoCard extends StatelessWidget {
   final String handoverSignalLabel;
   final double handoverUrgency;
   final bool handoverInProgress;
+  final String previousServer;
 
   const NetworkInfoCard({
     super.key,
@@ -26,6 +27,7 @@ class NetworkInfoCard extends StatelessWidget {
     this.handoverSignalLabel = 'Good',
     this.handoverUrgency = 0.0,
     this.handoverInProgress = false,
+    this.previousServer = '',
   });
 
   @override
@@ -72,6 +74,10 @@ class NetworkInfoCard extends StatelessWidget {
               _networkRow('Signal Quality', '${_signalIcon()} $handoverSignalLabel (${handoverUrgency.toStringAsFixed(0)})'),
               const SizedBox(height: 8),
               _networkRow('Handover Status', handoverInProgress ? '🔄 $handoverMessage' : handoverMessage),
+            ],
+            if (previousServer.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _networkRow('Previous Edge Server', previousServer.replaceFirst('http://', '').replaceFirst('https://', '')),
             ],
           ],
         ),

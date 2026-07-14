@@ -17,7 +17,8 @@
     <!-- Required to register edge-server hotspots via WifiNetworkSuggestion, so Android
          can roam between them automatically instead of sitting on whichever one it joined first -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
-    <!-- Location (required to read SSID on Android 8.1+) -->
+    <!-- Location (required to read SSID and real Wi-Fi scan result SSIDs on Android 8.1+,
+         including Android 13+ via the legacy location-permission path) -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
 

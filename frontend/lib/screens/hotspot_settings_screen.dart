@@ -4,9 +4,9 @@ import 'package:edge_sense/constants/theme.dart';
 import 'package:edge_sense/models/edge_hotspot.dart';
 import 'package:edge_sense/services/hotspot_manager.dart';
 
-/// Lets the user register every edge-server hotspot's Wi-Fi name/password, so
-/// Android can roam between them automatically instead of getting stuck on
-/// whichever one it joined first.
+/// Lets the user register every edge-server hotspot's Wi-Fi name, password,
+/// and edge-server address, so the app can actively switch between them as
+/// signal degrades instead of getting stuck on whichever one it joined first.
 class HotspotSettingsScreen extends StatefulWidget {
   const HotspotSettingsScreen({super.key});
 
@@ -92,9 +92,9 @@ class _HotspotSettingsScreenState extends State<HotspotSettingsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const Text(
-                    'Register the Wi-Fi name and password of every edge-server hotspot. '
-                    'Android will then roam between them automatically as you move, instead '
-                    'of staying stuck on whichever one it joined first.',
+                    'Register the Wi-Fi name, password, and edge server address for every '
+                    'hotspot. The app actively switches between them as you move — it doesn\'t '
+                    'rely on Android to roam there on its own.',
                     style: AppTheme.styleSubtitle,
                   ),
                   const SizedBox(height: 20),
@@ -120,7 +120,7 @@ class _HotspotSettingsScreenState extends State<HotspotSettingsScreen> {
                             style: const TextStyle(fontWeight: FontWeight.bold, color: AppTheme.colorTextDark),
                           ),
                           subtitle: Text(
-                            hotspot.password.isEmpty ? 'Open network' : '•' * hotspot.password.length,
+                            '${hotspot.password.isEmpty ? 'Open network' : '•' * hotspot.password.length} · ${hotspot.serverUrl}',
                             style: AppTheme.styleLabel,
                           ),
                           trailing: Row(
@@ -197,45 +197,72 @@ class _HotspotDialogState extends State<_HotspotDialog> {
       TextEditingController(text: widget.existing?.ssid ?? '');
   late final TextEditingController _passwordController =
       TextEditingController(text: widget.existing?.password ?? '');
-  String? _error;
+  late final TextEditingController _serverUrlController =
+      TextEditingController(text: widget.existing?.serverUrl ?? 'http://192.168.43.1:5000');
+  String? _ssidError;
+  String? _serverUrlError;
 
   @override
   void dispose() {
     _ssidController.dispose();
     _passwordController.dispose();
+    _serverUrlController.dispose();
     super.dispose();
   }
 
   void _submit() {
     final ssid = _ssidController.text.trim();
-    if (ssid.isEmpty) {
-      setState(() => _error = 'Wi-Fi name is required');
-      return;
-    }
-    Navigator.pop(context, EdgeHotspot(ssid: ssid, password: _passwordController.text));
+    final serverUrl = _serverUrlController.text.trim();
+    setState(() {
+      _ssidError = ssid.isEmpty ? 'Wi-Fi name is required' : null;
+      _serverUrlError = serverUrl.isEmpty
+          ? 'Server URL is required'
+          : (!serverUrl.startsWith('http://') && !serverUrl.startsWith('https://'))
+              ? 'Must start with http:// or https://'
+              : null;
+    });
+    if (_ssidError != null || _serverUrlError != null) return;
+    Navigator.pop(
+      context,
+      EdgeHotspot(ssid: ssid, password: _passwordController.text, serverUrl: serverUrl),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       title: Text(widget.existing == null ? 'Add Hotspot' : 'Edit Hotspot'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            controller: _ssidController,
-            decoration: InputDecoration(labelText: 'Wi-Fi Name (SSID)', errorText: _error),
-            textInputAction: TextInputAction.next,
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _passwordController,
-            decoration: const InputDecoration(labelText: 'Password (blank if open network)'),
-            obscureText: true,
-            textInputAction: TextInputAction.done,
-            onSubmitted: (_) => _submit(),
-          ),
-        ],
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _ssidController,
+              decoration: InputDecoration(labelText: 'Wi-Fi Name (SSID)', errorText: _ssidError),
+              textInputAction: TextInputAction.next,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _passwordController,
+              decoration: const InputDecoration(labelText: 'Password (blank if open network)'),
+              obscureText: true,
+              textInputAction: TextInputAction.next,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _serverUrlController,
+              decoration: InputDecoration(
+                labelText: 'Edge Server URL',
+                helperText: 'This hotspot\'s edge server address — not guessed from gateway IP',
+                helperMaxLines: 2,
+                errorText: _serverUrlError,
+              ),
+              keyboardType: TextInputType.url,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _submit(),
+            ),
+          ],
+        ),
       ),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),

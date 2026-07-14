@@ -64,6 +64,7 @@ class _HomePageState extends State<HomePage> {
       handoverSignalLabel: _handoverSignalLabel,
       handoverUrgency: _handoverUrgency,
       handoverInProgress: _handoverInProgress,
+      previousServer: _previousServer,
     );
   }
 
@@ -135,6 +136,7 @@ class _HomePageState extends State<HomePage> {
   String _handoverSignalLabel = 'Good';
   double _handoverUrgency = 0.0;
   bool _handoverInProgress = false;
+  String _previousServer = '';
 
   String _formatTime12h(DateTime dt) {
     int hour = dt.hour;
@@ -331,6 +333,7 @@ class _HomePageState extends State<HomePage> {
       _handoverSignalLabel = status.signalLabel;
       _handoverUrgency = status.urgency;
       _handoverInProgress = status.state == HandoverState.switching;
+      _previousServer = status.previousServer;
     });
     _updateAppState();
   }
@@ -737,6 +740,7 @@ class _HomePageState extends State<HomePage> {
                   SystemInfoButton(
                     sessionId: widget.sessionId,
                     appStateNotifier: _appStateNotifier,
+                    onMigrateNow: _handoverController.migrateNow,
                   ),
                 ],
               ),

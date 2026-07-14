@@ -4,11 +4,13 @@ import 'package:edge_sense/screens/system_information_screen.dart';
 class SystemInfoButton extends StatelessWidget {
   final String sessionId;
   final ValueNotifier<AppState> appStateNotifier;
+  final Future<String> Function() onMigrateNow;
 
   const SystemInfoButton({
     super.key,
     required this.sessionId,
     required this.appStateNotifier,
+    required this.onMigrateNow,
   });
 
   @override
@@ -23,6 +25,7 @@ class SystemInfoButton extends StatelessWidget {
             builder: (_) => SystemInformationScreen(
               sessionId: sessionId,
               appStateNotifier: appStateNotifier,
+              onMigrateNow: onMigrateNow,
             ),
           ),
         );

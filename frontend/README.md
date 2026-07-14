@@ -15,13 +15,23 @@ Watch progress under the repo's **Actions** tab; once it finishes, the APK is do
 
 > **Signing note**: this APK is currently signed with the Flutter debug key (`android/app/build.gradle.kts` → `signingConfig = signingConfigs.getByName("debug")`), which installs and runs fine for direct/sideloaded downloads. It is **not** suitable for the Play Store, and if you ever switch to a real release keystore, every device that installed a debug-signed build will need to uninstall first — Android refuses to install an update signed with a different key over an existing install.
 
-## Edge Server Networks (Wi-Fi roaming across hotspots)
+## Edge Server Networks (Wi-Fi switching across hotspots)
 
-If your edge servers are each on their **own separate Wi-Fi hotspot** (different SSID per server), Android will **not** automatically switch between them as you walk from one server's coverage into another's — it only auto-roams within a set of networks it's been told are interchangeable (same SSID, or explicitly registered). Without that, the [multi-edge-server handover](../README.md#multi-edge-server-handover) never triggers, because it relies on the OS having already switched gateways.
+If your edge servers are each on their **own separate Wi-Fi hotspot** (different SSID per server, e.g. each phone's personal hotspot), two problems show up without help from the app:
 
-To fix this, open **System Information → Edge Server Networks** in the app and add the Wi-Fi name + password of every edge-server hotspot. This registers them with Android via [`WifiNetworkSuggestion`](https://developer.android.com/reference/android/net/wifi/WifiNetworkSuggestion) (see [`hotspot_manager.dart`](lib/services/hotspot_manager.dart) and [`MainActivity.kt`](android/app/src/main/kotlin/com/example/edge_sense/MainActivity.kt)), which tells the OS these networks are all fair game for roaming — Android then switches between them on signal strength on its own, exactly like it would across APs on one enterprise Wi-Fi network. Requires Android 10+; the list is re-applied automatically on every app launch.
+1. **Android won't switch Wi-Fi networks on its own.** It only auto-roams within a set of networks it's been told are interchangeable (same SSID, or explicitly registered) — it will not abandon a hotspot that's still functioning, even weakly, in favor of a different one, no matter how close you get to it.
+2. **Even a manual Wi-Fi switch may not trigger migration**, because phone personal hotspots commonly all default their gateway IP to the same address (e.g. `192.168.43.1`). If the app derives each edge server's URL from that gateway IP, two different physical servers end up with the *identical* address — so the app can't tell anything changed, and the [multi-edge-server handover](../README.md#multi-edge-server-handover) silently never runs.
 
-If Android still won't switch after registering the hotspots, check **Settings → Network & internet → Wi-Fi → Network suggestions → EdgeSense** — some devices require the user to explicitly approve an app's suggestions the first time.
+Both are fixed via **System Information → Edge Server Networks**, where you register each hotspot's Wi-Fi name, password, and **explicit edge server address** (e.g. `http://192.168.43.1:5000`):
+
+* **Addressing** ([`edge_hotspot.dart`](lib/models/edge_hotspot.dart)): the server URL you enter is used directly, keyed by SSID — never guessed from gateway IP. This alone fixes problem #2, regardless of how the Wi-Fi switch happens.
+* **Switching** ([`wifi_connector.dart`](lib/services/wifi_connector.dart), [`handover_controller.dart`](lib/services/handover_controller.dart), [`MainActivity.kt`](android/app/src/main/kotlin/com/example/edge_sense/MainActivity.kt)): once the fuzzy urgency score is elevated, the app scans for other registered hotspots in range and actively forces a connection to the best one via Android's [`WifiNetworkSpecifier`](https://developer.android.com/reference/android/net/wifi/WifiNetworkSpecifier) API, then binds the app's traffic to it — rather than passively hoping Android switches on its own. The first connection to a given SSID shows a one-time system "Allow this app to connect?" dialog; Android remembers the choice afterward. Requires Android 10+.
+
+The app also registers all hotspots via [`WifiNetworkSuggestion`](https://developer.android.com/reference/android/net/wifi/WifiNetworkSuggestion) as a harmless best-effort background hint (re-applied on every launch), but that API alone is **not** sufficient — see problem #1 above — which is why the active `WifiNetworkSpecifier` path exists.
+
+### Testing: manual "Migrate Now"
+
+**System Information → Migration (Testing)** has a button that triggers a migration attempt immediately — it re-resolves whatever edge server the phone is actually on right now (fresh SSID/gateway lookup) and, if that differs from the server the app currently thinks it's using, runs the full snapshot + database migration and purge right away. Useful for testing the migration pipeline itself without waiting on the fuzzy urgency score to rise or a scan cycle to run. The server left behind by the most recent migration is also shown as "Previous Edge Server" in the network info card for visibility while testing.
 
 ## Getting Started
 

@@ -7,7 +7,10 @@ import 'package:http/http.dart' as http;
 import 'package:network_info_plus/network_info_plus.dart';
 
 import 'package:edge_sense/config/network_config.dart';
+import 'package:edge_sense/models/edge_hotspot.dart';
 import 'package:edge_sense/services/fuzzy_handover.dart';
+import 'package:edge_sense/services/hotspot_manager.dart';
+import 'package:edge_sense/services/wifi_connector.dart';
 import 'package:edge_sense/services/wifi_rssi.dart';
 
 enum HandoverState { stable, degraded, switching, switched }
@@ -17,6 +20,7 @@ class HandoverStatus {
   final double urgency;
   final String signalLabel;
   final String currentServer;
+  final String previousServer;
   final String message;
 
   const HandoverStatus({
@@ -24,6 +28,7 @@ class HandoverStatus {
     required this.urgency,
     required this.signalLabel,
     required this.currentServer,
+    required this.previousServer,
     required this.message,
   });
 
@@ -32,6 +37,7 @@ class HandoverStatus {
         urgency: 0,
         signalLabel: 'Good',
         currentServer: '',
+        previousServer: '',
         message: 'Connecting…',
       );
 }
@@ -43,8 +49,8 @@ class _ProbeResult {
 }
 
 /// Watches the current edge-server connection (Wi-Fi RSSI + request latency)
-/// through a fuzzy-logic urgency score, and migrates the session to a new edge
-/// server when the device roams to a different network gateway.
+/// through a fuzzy-logic urgency score, and migrates the session to a
+/// different edge server registered in [HotspotManager] when appropriate.
 ///
 /// Two things are migrated on handoff:
 ///   1. In-RAM state (unconsumed sliding-window buffer, step count, last
@@ -56,15 +62,23 @@ class _ProbeResult {
 ///      /session/{id}/database, so persisted history moves byte-for-byte
 ///      instead of being replayed row by row through the JSON API.
 ///
-/// Because the OS — not this app — decides which Wi-Fi AP the phone associates
-/// with, this controller can't "choose" to switch servers proactively. What the
-/// fuzzy score buys us instead:
-///   1. Predictive caching — while urgency is elevated, it opportunistically
-///      pre-fetches both of the above from the current server, so they're
-///      already in hand if the connection dies before a roam is detected.
-///   2. A degraded-signal warning when the connection is poor but no alternate
-///      edge server is visible on the current network (nothing to hand off to).
-///   3. Smoothing (EMA) so a single noisy reading doesn't flap the UI status.
+/// Migration triggers two ways:
+///   - **Passive**: the current Wi-Fi network (however it came to change — a
+///     manual switch, or Android roaming on its own) already resolves, via
+///     [HotspotManager.findBySsid], to a different registered edge server
+///     than the one currently in use.
+///   - **Active**: once the fuzzy urgency score is elevated, the controller
+///     scans for other registered hotspots in range and, if one is found,
+///     actively force-connects to it via [WifiConnector] rather than waiting
+///     for Android to roam on its own — which it largely won't do while the
+///     current network is still functioning, even if weak.
+///
+/// Other fuzzy-score uses:
+///   - Predictive caching — while urgency is elevated, it opportunistically
+///     pre-fetches both migration payloads from the current server, so
+///     they're already in hand if the connection dies before a switch happens.
+///   - A degraded-signal warning when nothing better is found nearby.
+///   - Smoothing (EMA) so a single noisy reading doesn't flap the UI status.
 class HandoverController {
   final String Function() sessionIdProvider;
   final void Function(String newServerUrl) onServerChanged;
@@ -74,7 +88,10 @@ class HandoverController {
   static const _tickInterval = Duration(seconds: 4);
   static const _handoffCooldown = Duration(seconds: 15);
   static const _cacheInterval = Duration(seconds: 5);
+  static const _hotspotRefreshInterval = Duration(seconds: 30);
+  static const _scanInterval = Duration(seconds: 20);
   static const _predictiveCacheThreshold = 55.0;
+  static const _scanUrgencyThreshold = 60.0;
   static const _degradedThreshold = 70.0;
 
   Timer? _timer;
@@ -85,6 +102,18 @@ class HandoverController {
   DateTime? _lastCacheTime;
   DateTime? _lastHandoffTime;
   bool _handoffInProgress = false;
+
+  List<EdgeHotspot> _hotspots = [];
+  DateTime? _lastHotspotRefresh;
+  DateTime? _lastScanTime;
+
+  // The server address left behind by the most recent migration (automatic or
+  // manual). Kept purely for visibility/debugging — e.g. showing "Previous: X /
+  // Current: Y" in a test UI — the actual migration decision always compares
+  // against a freshly-resolved current network, not this held-onto value.
+  String? _previousServerUrl;
+  String? get previousServerUrl => _previousServerUrl;
+  String? get currentServerUrl => serverBaseUrl.isEmpty ? null : serverBaseUrl;
 
   HandoverController({required this.sessionIdProvider, required this.onServerChanged});
 
@@ -97,6 +126,45 @@ class HandoverController {
 
   void dispose() {
     _timer?.cancel();
+  }
+
+  /// Reactively checks whatever edge server the phone is actually connected to
+  /// *right now* (fresh SSID/gateway resolution, not the smoothed/cooldown-gated
+  /// automatic path) and migrates the session to it immediately if that differs
+  /// from the server the app currently thinks it's using — without waiting for
+  /// the next tick or for the fuzzy urgency score to rise. For testing the
+  /// migration pipeline on demand, independent of Wi-Fi-switch detection.
+  Future<String> migrateNow() async {
+    if (serverBaseUrl.isEmpty) return 'No edge server configured yet.';
+    final sessionId = sessionIdProvider();
+    if (sessionId.isEmpty) return 'No active session — start the service first.';
+    if (_handoffInProgress) return 'A migration is already in progress.';
+
+    if (_lastHotspotRefresh == null || DateTime.now().difference(_lastHotspotRefresh!) > _hotspotRefreshInterval) {
+      _hotspots = await HotspotManager.load();
+      _lastHotspotRefresh = DateTime.now();
+    }
+
+    final resolvedServer = await _resolveServerUrlForCurrentNetwork();
+    if (resolvedServer == null) {
+      return 'Could not determine an edge server for the current network.';
+    }
+    if (resolvedServer == serverBaseUrl) {
+      return 'Already on $resolvedServer — nothing to migrate.';
+    }
+
+    final oldServer = serverBaseUrl;
+    final probe = await _probe(oldServer);
+    await _handoff(
+      sessionId: sessionId,
+      oldServer: oldServer,
+      newServer: resolvedServer,
+      liveProbeOk: probe.ok,
+      fuzzyLabel: status.value.signalLabel,
+      switchingMessage: 'Manual migration requested — moving session from $oldServer to $resolvedServer…',
+      forceConnectHotspot: null,
+    );
+    return 'Migration to $resolvedServer requested.';
   }
 
   Future<void> _tick() async {
@@ -115,6 +183,11 @@ class HandoverController {
     );
     _smoothedUrgency = _smoothedUrgency == 0 ? fuzzy.urgency : (0.4 * fuzzy.urgency + 0.6 * _smoothedUrgency);
 
+    if (_lastHotspotRefresh == null || DateTime.now().difference(_lastHotspotRefresh!) > _hotspotRefreshInterval) {
+      _hotspots = await HotspotManager.load();
+      _lastHotspotRefresh = DateTime.now();
+    }
+
     if (_smoothedUrgency >= _predictiveCacheThreshold && probe.ok && sessionId.isNotEmpty) {
       final since = _lastCacheTime;
       if (since == null || DateTime.now().difference(since) > _cacheInterval) {
@@ -126,33 +199,46 @@ class HandoverController {
       }
     }
 
-    String? gateway;
-    try {
-      gateway = await NetworkInfo().getWifiGatewayIP();
-    } catch (e) {
-      debugPrint('HandoverController: gateway lookup failed: $e');
-    }
-    final candidateServer = (gateway != null && gateway.isNotEmpty) ? 'http://$gateway:5000' : null;
-
     final cooldownElapsed = _lastHandoffTime == null || DateTime.now().difference(_lastHandoffTime!) > _handoffCooldown;
 
-    if (candidateServer != null && candidateServer != serverBaseUrl && cooldownElapsed && sessionId.isNotEmpty) {
-      _handoffInProgress = true;
-      status.value = HandoverStatus(
-        state: HandoverState.switching,
-        urgency: _smoothedUrgency,
-        signalLabel: fuzzy.label,
-        currentServer: serverBaseUrl,
-        message: 'New network detected — migrating session to $candidateServer…',
-      );
-      await _performHandoff(
-        sessionId: sessionId,
-        oldServer: serverBaseUrl,
-        newServer: candidateServer,
-        liveProbeOk: probe.ok,
-      );
-      _handoffInProgress = false;
-      return;
+    // Passive path: has the current network already resolved to a different,
+    // known edge server (e.g. the user manually switched Wi-Fi, or Android
+    // roamed within a same-SSID mesh on its own)?
+    if (cooldownElapsed && sessionId.isNotEmpty) {
+      final resolvedServer = await _resolveServerUrlForCurrentNetwork();
+      if (resolvedServer != null && resolvedServer != serverBaseUrl) {
+        await _handoff(
+          sessionId: sessionId,
+          oldServer: serverBaseUrl,
+          newServer: resolvedServer,
+          liveProbeOk: probe.ok,
+          fuzzyLabel: fuzzy.label,
+          switchingMessage: 'Network change detected — migrating session to $resolvedServer…',
+          forceConnectHotspot: null,
+        );
+        return;
+      }
+    }
+
+    // Active path: the current connection is degrading — proactively scan for
+    // a better registered hotspot and force-connect to it, rather than waiting
+    // for Android to roam there on its own.
+    final scanDue = _lastScanTime == null || DateTime.now().difference(_lastScanTime!) > _scanInterval;
+    if (_smoothedUrgency >= _scanUrgencyThreshold && cooldownElapsed && scanDue && _hotspots.isNotEmpty && sessionId.isNotEmpty) {
+      _lastScanTime = DateTime.now();
+      final target = await _findBetterHotspot();
+      if (target != null) {
+        await _handoff(
+          sessionId: sessionId,
+          oldServer: serverBaseUrl,
+          newServer: target.serverUrl,
+          liveProbeOk: probe.ok,
+          fuzzyLabel: fuzzy.label,
+          switchingMessage: 'Signal degrading — switching to ${target.ssid}…',
+          forceConnectHotspot: target,
+        );
+        return;
+      }
     }
 
     status.value = HandoverStatus(
@@ -160,10 +246,82 @@ class HandoverController {
       urgency: _smoothedUrgency,
       signalLabel: fuzzy.label,
       currentServer: serverBaseUrl,
+      previousServer: _previousServerUrl ?? '',
       message: _smoothedUrgency >= _degradedThreshold
-          ? 'Signal weak — no alternate edge server detected on this network.'
+          ? 'Signal weak — searching for a better edge server…'
           : 'Connected to edge server.',
     );
+  }
+
+  /// Resolves the edge server address for whatever Wi-Fi network is currently
+  /// active, preferring the registered hotspot list (keyed by SSID, since
+  /// phone hotspots commonly share the same gateway IP) and falling back to
+  /// the legacy gateway-IP guess for unregistered/single-server deployments.
+  Future<String?> _resolveServerUrlForCurrentNetwork() async {
+    String? ssid;
+    try {
+      ssid = await NetworkInfo().getWifiName();
+    } catch (e) {
+      debugPrint('HandoverController: SSID lookup failed: $e');
+    }
+
+    final match = HotspotManager.findBySsid(_hotspots, ssid);
+    if (match != null) return match.serverUrl;
+
+    try {
+      final gateway = await NetworkInfo().getWifiGatewayIP();
+      if (gateway != null && gateway.isNotEmpty) return 'http://$gateway:5000';
+    } catch (e) {
+      debugPrint('HandoverController: gateway lookup failed: $e');
+    }
+    return null;
+  }
+
+  /// Scans for visible Wi-Fi networks and returns the strongest registered
+  /// hotspot found that isn't the one currently in use, or null if none.
+  Future<EdgeHotspot?> _findBetterHotspot() async {
+    final results = await WifiConnector.scan();
+    if (results.isEmpty) return null;
+
+    EdgeHotspot? best;
+    int? bestRssi;
+    for (final r in results) {
+      final match = HotspotManager.findBySsid(_hotspots, r.ssid);
+      if (match == null || match.serverUrl == serverBaseUrl) continue;
+      if (best == null || r.rssi > (bestRssi ?? -999)) {
+        best = match;
+        bestRssi = r.rssi;
+      }
+    }
+    return best;
+  }
+
+  Future<void> _handoff({
+    required String sessionId,
+    required String oldServer,
+    required String newServer,
+    required bool liveProbeOk,
+    required String fuzzyLabel,
+    required String switchingMessage,
+    required EdgeHotspot? forceConnectHotspot,
+  }) async {
+    _handoffInProgress = true;
+    status.value = HandoverStatus(
+      state: HandoverState.switching,
+      urgency: _smoothedUrgency,
+      signalLabel: fuzzyLabel,
+      currentServer: oldServer,
+      previousServer: _previousServerUrl ?? '',
+      message: switchingMessage,
+    );
+    await _migrate(
+      sessionId: sessionId,
+      oldServer: oldServer,
+      newServer: newServer,
+      liveProbeOk: liveProbeOk,
+      forceConnectHotspot: forceConnectHotspot,
+    );
+    _handoffInProgress = false;
   }
 
   Future<_ProbeResult> _probe(String server) async {
@@ -243,11 +401,12 @@ class HandoverController {
     }
   }
 
-  Future<void> _performHandoff({
+  Future<void> _migrate({
     required String sessionId,
     required String oldServer,
     required String newServer,
     required bool liveProbeOk,
+    required EdgeHotspot? forceConnectHotspot,
   }) async {
     Map<String, dynamic>? snapshot;
     Uint8List? dbBytes;
@@ -257,6 +416,10 @@ class HandoverController {
     }
     snapshot ??= _cachedSnapshot;
     dbBytes ??= _cachedDbBytes;
+
+    if (forceConnectHotspot != null) {
+      await WifiConnector.connectTo(forceConnectHotspot.ssid, forceConnectHotspot.password);
+    }
 
     bool candidateReady = false;
     for (var attempt = 0; attempt < 4; attempt++) {
@@ -291,6 +454,7 @@ class HandoverController {
     _smoothedUrgency = 0;
     _consecutiveFailures = 0;
 
+    _previousServerUrl = oldServer;
     serverBaseUrl = newServer;
     onServerChanged(newServer);
 
@@ -299,6 +463,7 @@ class HandoverController {
       urgency: 0,
       signalLabel: 'Good',
       currentServer: newServer,
+      previousServer: oldServer,
       message: candidateReady
           ? 'Switched to edge server at $newServer.'
           : 'Moved to $newServer, waiting for it to come online…',

@@ -7,13 +7,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:edge_sense/models/edge_hotspot.dart';
 
-/// Registers known edge-server Wi-Fi hotspots with Android via
-/// WifiNetworkSuggestion, so the OS roams between them on signal strength on
-/// its own. This exists because Android does *not* auto-switch between two
-/// Wi-Fi networks with different SSIDs just because one gets stronger — it
-/// only roams within a set of networks it's been told are interchangeable.
-/// Without this, [HandoverController]'s session migration never triggers,
-/// because it relies on Android already having switched gateways.
+/// Persists the list of known edge-server hotspots ({ssid, password,
+/// serverUrl}) and registers them with Android via WifiNetworkSuggestion as a
+/// best-effort background hint. The actual switching is driven actively by
+/// [WifiConnector] + [HandoverController], since WifiNetworkSuggestion alone
+/// only helps Android auto-connect when it has no working Wi-Fi at all — it
+/// won't abandon a hotspot that's still functioning, even if weak.
+///
+/// Each hotspot's `serverUrl` is explicit rather than derived from the Wi-Fi
+/// gateway IP, because phone personal hotspots commonly all default to the
+/// same gateway address regardless of which phone is hosting them.
 class HotspotManager {
   static const MethodChannel _channel = MethodChannel('com.edgesense.app/wifi');
   static const _prefsKey = 'edge_hotspots';
@@ -60,6 +63,18 @@ class HotspotManager {
     } catch (e) {
       return 'Failed to register hotspots with Android: $e';
     }
+  }
+
+  /// Finds the registered hotspot matching [ssid] (case-insensitive), or null.
+  /// Android's reported SSID is sometimes wrapped in double quotes; callers
+  /// don't need to strip that themselves.
+  static EdgeHotspot? findBySsid(List<EdgeHotspot> hotspots, String? ssid) {
+    if (ssid == null || ssid.isEmpty) return null;
+    final normalized = ssid.replaceAll('"', '').trim().toLowerCase();
+    for (final hotspot in hotspots) {
+      if (hotspot.ssid.trim().toLowerCase() == normalized) return hotspot;
+    }
+    return null;
   }
 
   static String _describeStatus(int? status) {
