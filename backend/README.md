@@ -98,19 +98,19 @@ In a deployment with multiple edge servers (one per physical location/gateway, e
 
 Since the OS decides which Wi-Fi AP the phone associates with (the app can't force that choice), the client — not the server — drives the migration. It runs a small fuzzy-logic controller (`frontend/lib/services/handover_controller.dart` + `fuzzy_handover.dart`) that fuzzifies Wi-Fi RSSI and request latency into an "urgency" score (0–100) via a Sugeno-style rule base. That score is used to:
 
-1. **Predictively cache** a snapshot and a copy of the session database from the current server once urgency crosses a threshold, so they're already in hand if the connection dies before a network change is even detected.
-2. **Detect a gateway/network change** (the phone associated with a different edge server's AP) and migrate: pull the session's live state and its SQLite file from the old server if it's still reachable (falling back to the predictive cache if not), push both to the new server, then switch the app's active server URL.
+1. **Predictively cache** a snapshot and a copy of the session's history from the current server once urgency crosses a threshold, so they're already in hand if the connection dies before a network change is even detected.
+2. **Detect a gateway/network change** (the phone associated with a different edge server's AP) and migrate: pull the session's live state and its JSON history file from the old server if it's still reachable (falling back to the predictive cache if not), push both to the new server, then switch the app's active server URL.
 3. **Purge the old server** once the new one confirms it has the data — so if the phone ever roams back to a server it already left, it starts clean instead of finding (and potentially conflicting with) stale pre-handoff history.
 4. **Surface a "signal weak" status** in the UI when no alternate edge server is visible on the current network — there's nothing to hand off to, so the app just warns instead of guessing.
 
 Two things move on a handoff, via five endpoints (see below):
 
 * **In-RAM state** (unconsumed sliding-window buffer, step count, last prediction) — `GET/POST /session/{id}/snapshot|restore`, JSON. This is what lets inference keep running without a cold start.
-* **Persisted history** — the actual SQLite file the session lives in, `data/sessions/session_{id}.db`, which is exactly what `docker-compose.yml` mounts at `/app/data`. `GET/POST /session/{id}/database` downloads/uploads that file whole (as raw bytes), so history migrates byte-for-byte rather than being replayed row by row. On upload, the new server also mirrors those rows into its own main `har_metrics.db` so session-less aggregate endpoints (like `/dashboard`) pick them up too.
+* **Persisted history** — the session's history file, `data/sessions/session_{id}.json` (a plain JSON array of `{timestamp, activity, confidence, step_count}` records), which is exactly what `docker-compose.yml` mounts at `/app/data`. `GET/POST /session/{id}/database` downloads/uploads that file whole (as raw bytes), so history migrates byte-for-byte rather than being replayed row by row — being plain JSON, it's also easy to inspect, diff, or hand-edit if you need to debug a migration. On upload, the new server validates the payload is a proper JSON list before accepting it, then mirrors its records into its own main `har_metrics.db` so session-less aggregate endpoints (like `/dashboard`) pick them up too.
 
-Once both of the above have landed on the new server, the client calls `DELETE /session/{id}` on the old one — dropping its dedicated SQLite file, its rows in `har_metrics.db`, and its in-RAM store. This purge only fires after a confirmed successful migration, never on a failed handoff (there'd be nowhere else the data exists), and it's best-effort: if the old server is already unreachable — usually the very reason the phone roamed — there's nothing to clean up there anyway.
+Once both of the above have landed on the new server, the client calls `DELETE /session/{id}` on the old one — dropping its JSON history file, its rows in `har_metrics.db`, and its in-RAM store. This purge only fires after a confirmed successful migration, never on a failed handoff (there'd be nowhere else the data exists), and it's best-effort: if the old server is already unreachable — usually the very reason the phone roamed — there's nothing to clean up there anyway.
 
-Each edge server otherwise still keeps its own independent database files; a handoff explicitly carries one session's data forward (and cleans up behind it) rather than centralizing storage across servers.
+Each edge server otherwise still keeps its own independent data; a handoff explicitly carries one session's history forward (and cleans up behind it) rather than centralizing storage across servers. The main `har_metrics.db` (cross-session aggregates, hourly distributions, etc.) stays SQLite regardless, since those queries still benefit from real SQL aggregation — only the per-session file that actually gets migrated is JSON.
 
 ---
 
@@ -154,11 +154,11 @@ Each edge server otherwise still keeps its own independent database files; a han
 
 ### 4. Session Handoff — Database Download
 * **Route**: `GET /session/{session_id}/database`
-* **Description**: Downloads the raw SQLite file backing this session's persisted history (`data/sessions/session_{session_id}.db` — the same file mounted at `/app/data` by `docker-compose.yml`), as `application/octet-stream`. Called on the OLD edge server so the client can carry the file to the new one byte-for-byte.
+* **Description**: Downloads the JSON file backing this session's persisted history (`data/sessions/session_{session_id}.json` — the same file mounted at `/app/data` by `docker-compose.yml`), as `application/json`. A plain array of `{timestamp, activity, confidence, step_count}` records. Called on the OLD edge server so the client can carry the file to the new one byte-for-byte.
 
 ### 5. Session Handoff — Database Upload
 * **Route**: `POST /session/{session_id}/database`
-* **Description**: Accepts a `multipart/form-data` file upload (field name `file`) and overwrites this server's copy of the session's SQLite file with it, then mirrors its rows into the local `har_metrics.db` so session-less endpoints (like `/dashboard`) reflect the migrated history too. Called on the NEW edge server as the last step of a handoff. Skips the main-database mirroring if rows for this session already exist there (idempotent against retried uploads).
+* **Description**: Accepts a `multipart/form-data` file upload (field name `file`) and overwrites this server's copy of the session's JSON history file with it — rejecting the upload with `400` if the payload isn't a valid JSON list — then mirrors its records into the local `har_metrics.db` so session-less endpoints (like `/dashboard`) reflect the migrated history too. Called on the NEW edge server as the last step of a handoff. Skips the main-database mirroring if rows for this session already exist there (idempotent against retried uploads).
 * **Example JSON Response**:
   ```json
   {
@@ -170,7 +170,7 @@ Each edge server otherwise still keeps its own independent database files; a han
 
 ### 6. Session Handoff — Purge
 * **Route**: `DELETE /session/{session_id}`
-* **Description**: Deletes this session's data on this server — its in-RAM buffer/state and its dedicated SQLite file, plus its rows in `har_metrics.db`. Called on the OLD edge server as the final step of a handoff, once the client has confirmed the session actually landed on the new server. This prevents a subtle problem: if the phone later roams back to this same edge server, it starts completely clean instead of finding stale pre-handoff history that could conflict with (or be silently skipped by) the idempotency check in `sync_session_into_main_db`.
+* **Description**: Deletes this session's data on this server — its in-RAM buffer/state and its JSON history file, plus its rows in `har_metrics.db`. Called on the OLD edge server as the final step of a handoff, once the client has confirmed the session actually landed on the new server. This prevents a subtle problem: if the phone later roams back to this same edge server, it starts completely clean instead of finding stale pre-handoff history that could conflict with (or be silently skipped by) the idempotency check in `sync_session_into_main_db`.
 * **Example JSON Response**:
   ```json
   {

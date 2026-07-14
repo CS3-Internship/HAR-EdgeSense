@@ -57,28 +57,31 @@ def restore_session_snapshot(session_id: str, snapshot: SessionSnapshot):
 @router.get("/session/{session_id}/database")
 def download_session_database(session_id: str):
     """
-    Downloads the raw SQLite file backing this session's persisted history — the
+    Downloads the JSON file backing this session's persisted history — the
     same file that lives under the /app/data volume mount in docker-compose.yml.
     Called on the OLD edge server so the client can carry it over byte-for-byte to
-    the new one, rather than replaying rows through the JSON API.
+    the new one, rather than replaying rows through the JSON analytics API.
     """
-    data = database.get_session_db_bytes(session_id)
+    data = database.get_session_json_bytes(session_id)
     return Response(
         content=data,
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="session_{session_id}.db"'},
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="session_{session_id}.json"'},
     )
 
 @router.post("/session/{session_id}/database")
 async def upload_session_database(session_id: str, file: UploadFile = File(...)):
     """
-    Replaces this server's copy of a session's SQLite file with one downloaded from
-    another edge server, then mirrors its rows into the local main database so
-    session-less aggregate endpoints (e.g. /dashboard) reflect the migrated history.
-    Called on the NEW edge server as part of a handoff.
+    Replaces this server's copy of a session's JSON history file with one downloaded
+    from another edge server, then mirrors its records into the local main database
+    so session-less aggregate endpoints (e.g. /dashboard) reflect the migrated
+    history. Called on the NEW edge server as part of a handoff.
     """
     data = await file.read()
-    database.replace_session_db_file(session_id, data)
+    try:
+        database.replace_session_json_file(session_id, data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     database.sync_session_into_main_db(session_id)
     return {"status": "restored", "session_id": session_id, "bytes": len(data)}
 

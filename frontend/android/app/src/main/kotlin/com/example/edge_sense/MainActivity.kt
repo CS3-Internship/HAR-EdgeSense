@@ -145,6 +145,19 @@ class MainActivity : FlutterActivity() {
                                         }
                                     }
 
+                                    override fun onLost(network: Network) {
+                                        super.onLost(network)
+                                        // This specific requested network (often a local-only side
+                                        // connection, not the phone's overall default) went away.
+                                        // Release the process-wide binding rather than leaving the
+                                        // app pinned to a dead network — this is what caused it to look
+                                        // disconnected in-app while the system Wi-Fi icon stayed fine.
+                                        connectivityManager.bindProcessToNetwork(null)
+                                        if (activeNetworkCallback === this) {
+                                            activeNetworkCallback = null
+                                        }
+                                    }
+
                                     override fun onUnavailable() {
                                         super.onUnavailable()
                                         if (!resultDelivered) {
