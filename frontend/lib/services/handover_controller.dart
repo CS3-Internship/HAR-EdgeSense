@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -56,11 +55,11 @@ class _ProbeResult {
 ///   1. In-RAM state (unconsumed sliding-window buffer, step count, last
 ///      prediction) via the small JSON /session/{id}/snapshot + /restore API,
 ///      needed so inference doesn't have to "cold start" on the new server.
-///   2. The session's actual SQLite file — the same file docker-compose.yml
-///      mounts at /app/data/sessions/session_<id>.db — downloaded whole from
-///      the old server and uploaded whole to the new one via
-///      /session/{id}/database, so persisted history moves byte-for-byte
-///      instead of being replayed row by row through the JSON API.
+///   2. The session's persisted history file — the same JSON file
+///      docker-compose.yml mounts at `/app/data/sessions/` — downloaded whole
+///      from the old server and uploaded whole to the new one via
+///      `/session/{id}/database`, so history moves byte-for-byte instead of
+///      being replayed row by row through the analytics API.
 ///
 /// Migration triggers two ways:
 ///   - **Passive**: the current Wi-Fi network (however it came to change — a

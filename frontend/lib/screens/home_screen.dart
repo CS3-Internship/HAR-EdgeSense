@@ -165,6 +165,7 @@ class _HomePageState extends State<HomePage> {
     _handoverController.start();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (kIsWeb) return;
       await _requestPermissions();
       _initService();
       final running = await FlutterForegroundTask.isRunningService;
@@ -178,7 +179,7 @@ class _HomePageState extends State<HomePage> {
     });
 
     _networkInfoTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
-      if (Platform.isAndroid) {
+      if (!kIsWeb && Platform.isAndroid) {
         final status = await Permission.locationWhenInUse.status;
         if (mounted) {
           setState(() {
@@ -256,7 +257,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _syncStepsToTask() {
-    if (_prefs == null) return;
+    if (kIsWeb || _prefs == null) return;
     const dateKey = 'steps_date';
     final stepsDate = _prefs!.getString(dateKey) ?? _getCurrentDateStr();
     FlutterForegroundTask.sendDataToTask({
@@ -480,13 +481,15 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _requestPermissions() async {
+    if (kIsWeb) return;
+
     final notificationPermission =
         await FlutterForegroundTask.checkNotificationPermission();
     if (notificationPermission != NotificationPermission.granted) {
       await FlutterForegroundTask.requestNotificationPermission();
     }
 
-    if (Platform.isAndroid) {
+    if (!kIsWeb && Platform.isAndroid) {
       if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
         await FlutterForegroundTask.requestIgnoreBatteryOptimization();
       }

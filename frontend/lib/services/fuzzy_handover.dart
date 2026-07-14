@@ -7,8 +7,6 @@
 ///
 /// Urgency is a score from 0 (rock solid, stay put) to 100 (about to drop,
 /// switch now if a candidate is available).
-library fuzzy_handover;
-
 class FuzzyResult {
   final double urgency; // 0-100
   final bool rssiAvailable;

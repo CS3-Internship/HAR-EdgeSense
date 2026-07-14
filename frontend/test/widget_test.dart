@@ -6,8 +6,8 @@ void main() {
     // Build our app and trigger a frame.
     await tester.pumpWidget(const EdgeSenseApp());
 
-    // Verify that our app starts in the offline state.
-    expect(find.text('Node Offline'), findsOneWidget);
-    expect(find.text('Node Linked'), findsNothing);
+    // Verify the app starts on the session entry screen.
+    expect(find.text('EdgeSense'), findsOneWidget);
+    expect(find.text('Start Session'), findsOneWidget);
   });
 }
